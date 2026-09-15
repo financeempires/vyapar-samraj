@@ -1,0 +1,12 @@
+target/
+.env
+.env.*
+*.env
+*.log
+.idea/
+.vscode/
+*.iml
+.git/
+.gitignore
+.DS_Store
+Thumbs.db
