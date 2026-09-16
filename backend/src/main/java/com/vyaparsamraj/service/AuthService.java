@@ -40,6 +40,8 @@ import java.time.OffsetDateTime;
 public class AuthService {
 
     private final SuperAdminRepository superAdminRepo;
+    private final com.vyaparsamraj.repository.UserAccountRepository userAccountRepo;
+    private final com.vyaparsamraj.repository.ProfileRepository profileRepo;
     private final OtpChallengeRepository otpChallengeRepo;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
@@ -69,62 +71,105 @@ public class AuthService {
         String cleanUsername = req.username() != null ? req.username().trim() : "";
         String cleanPassword = req.password() != null ? req.password() : "";
 
-        log.info("[AuthService Debug] Searching for Super Admin account with identifier: {}", cleanUsername);
+        log.info("[AuthService] Processing login attempt for identifier: {}", cleanUsername);
 
+        // 1. Check SuperAdmin Accounts First
         SuperAdminAccount account = superAdminRepo.findByUsername(cleanUsername)
                 .or(() -> superAdminRepo.findByUsernameIgnoreCase(cleanUsername))
                 .or(() -> superAdminRepo.findByEmailIgnoreCase(cleanUsername))
                 .orElse(null);
 
-        if (account == null) {
-            log.warn("[AuthService Debug] Super Admin account found: false");
-            auditLogger.log("LOGIN_FAILED",
-                    "Failed login attempt for username: " + cleanUsername, null);
-            throw new UnauthorizedException("Invalid username or password");
+        if (account != null) {
+            log.info("[AuthService] Super Admin account matched");
+            boolean isPasswordValid = passwordEncoder.matches(cleanPassword, account.getPasswordHash());
+            if (!isPasswordValid) {
+                auditLogger.log("LOGIN_FAILED", "Failed login attempt for Super Admin: " + cleanUsername, null);
+                throw new UnauthorizedException("Invalid username or password");
+            }
+
+            // Generate 6-digit OTP
+            String otpCode = String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
+            String otpHash = passwordEncoder.encode(otpCode);
+
+            OtpChallenge challenge = OtpChallenge.builder()
+                    .superAdminId(account.getId())
+                    .otpHash(otpHash)
+                    .attemptCount(0)
+                    .used(false)
+                    .expiresAt(OffsetDateTime.now().plusMinutes(5))
+                    .build();
+            otpChallengeRepo.save(challenge);
+
+            emailService.sendOtpEmail(account.getEmail(), otpCode);
+
+            return LoginResponse.superAdminOtp(challenge.getId().toString(), maskEmail(account.getEmail()));
         }
 
-        log.info("[AuthService Debug] Super Admin account found: true");
+        // 2. Check Normal User / Sub-User in users & profiles table
+        com.vyaparsamraj.entity.UserAccount userAccount = userAccountRepo.findByIdentifier(cleanUsername)
+                .or(() -> userAccountRepo.findByUsernameIgnoreCase(cleanUsername))
+                .or(() -> userAccountRepo.findByEmailIgnoreCase(cleanUsername))
+                .orElse(null);
 
-        String hashFormat = account.getPasswordHash() != null && account.getPasswordHash().startsWith("$2") ? "BCrypt" : "Other";
-        log.info("[AuthService Debug] Password hash format: {}", hashFormat);
-
-        // SOLE authentication source: BCrypt verification against the database password_hash.
-        // There is no fallback, no second source, no alternative verification path.
-        boolean isPasswordValid = passwordEncoder.matches(cleanPassword, account.getPasswordHash());
-
-        log.info("[AuthService Debug] Password verification result: {}", isPasswordValid);
-
-        if (!isPasswordValid) {
-            auditLogger.log("LOGIN_FAILED",
-                    "Failed login attempt for username: " + cleanUsername, null);
-            throw new UnauthorizedException("Invalid username or password");
+        if (userAccount == null) {
+            java.util.Optional<com.vyaparsamraj.entity.Profile> pOpt = profileRepo.findByUsernameIgnoreCase(cleanUsername)
+                    .or(() -> profileRepo.findByEmailIgnoreCase(cleanUsername));
+            if (pOpt.isPresent()) {
+                userAccount = userAccountRepo.findById(pOpt.get().getId()).orElse(null);
+            }
         }
 
-        // Generate 6-digit cryptographically secure OTP
-        String otpCode = String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
-        String otpHash = passwordEncoder.encode(otpCode);
+        if (userAccount != null) {
+            String status = userAccount.getStatus() != null ? userAccount.getStatus().toUpperCase() : "ACTIVE";
+            if ("INACTIVE".equals(status) || "DISABLED".equals(status)) {
+                throw new UnauthorizedException("Account is inactive. Please contact administrator.");
+            }
 
-        // Save OTP challenge with 5-minute expiration
-        OtpChallenge challenge = OtpChallenge.builder()
-                .superAdminId(account.getId())
-                .otpHash(otpHash)
-                .attemptCount(0)
-                .used(false)
-                .expiresAt(OffsetDateTime.now().plusMinutes(5))
-                .build();
+            boolean isPasswordValid = false;
+            if (userAccount.getPasswordHash() != null && !userAccount.getPasswordHash().isBlank()) {
+                isPasswordValid = passwordEncoder.matches(cleanPassword, userAccount.getPasswordHash());
+            }
+            if (!isPasswordValid && userAccount.getPassword() != null && !userAccount.getPassword().isBlank()) {
+                isPasswordValid = cleanPassword.equals(userAccount.getPassword())
+                        || passwordEncoder.matches(cleanPassword, userAccount.getPassword());
+            }
 
-        otpChallengeRepo.save(challenge);
+            if (isPasswordValid) {
+                String role = "USER";
+                String parentId = userAccount.getParentUserId() != null ? userAccount.getParentUserId().toString() : null;
 
-        // Deliver OTP email
-        emailService.sendOtpEmail(account.getEmail(), otpCode);
+                java.util.Optional<com.vyaparsamraj.entity.Profile> profileOpt = profileRepo.findById(userAccount.getId());
+                if (profileOpt.isPresent()) {
+                    com.vyaparsamraj.entity.Profile p = profileOpt.get();
+                    if (p.getRole() != null) {
+                        role = p.getRole().name();
+                    }
+                    if (p.getParentId() != null) {
+                        parentId = p.getParentId().toString();
+                    }
+                }
 
-        return new LoginResponse(
-                true,
-                true,
-                challenge.getId().toString(),
-                maskEmail(account.getEmail()),
-                "OTP verification required"
-        );
+                String token = jwtTokenProvider.generateToken(
+                        userAccount.getId(),
+                        userAccount.getUsername(),
+                        userAccount.getFullName(),
+                        role,
+                        parentId
+                );
+
+                setSessionCookie(response, token);
+
+                userAccount.setLastLoginAt(OffsetDateTime.now());
+                userAccountRepo.save(userAccount);
+
+                auditLogger.log("USER_LOGIN_SUCCESS", "User " + userAccount.getUsername() + " logged in", userAccount.getId().toString());
+
+                return LoginResponse.userSuccess(token, role, userAccount.getUsername(), userAccount.getFullName());
+            }
+        }
+
+        auditLogger.log("LOGIN_FAILED", "Failed login attempt for identifier: " + cleanUsername, null);
+        throw new UnauthorizedException("Invalid username or password");
     }
 
     /**
@@ -168,7 +213,7 @@ public class AuthService {
                     "Super admin " + account.getUsername() + " verified OTP, PIN verification required",
                     account.getId().toString());
 
-            return new LoginResponse(true, false, challenge.getId().toString(), null, "PIN verification required", true);
+            return LoginResponse.superAdminPinRequired(challenge.getId().toString());
         }
 
         // Mark OTP challenge as used if no PIN is configured
@@ -191,7 +236,7 @@ public class AuthService {
 
         emailService.sendLoginNotification(account.getEmail(), account.getFullName());
 
-        return new LoginResponse(true, false, null, null, "Authentication successful", false);
+        return LoginResponse.superAdminSuccess(token, "Authentication successful");
     }
 
     /**
@@ -475,7 +520,7 @@ public class AuthService {
 
         emailService.sendLoginNotification(account.getEmail(), account.getFullName());
 
-        return new LoginResponse(true, false, null, null, "PIN verified successfully. Welcome!", false);
+        return LoginResponse.superAdminSuccess(token, "PIN verified successfully. Welcome!");
     }
 
     /**

@@ -17,7 +17,7 @@ import java.util.UUID;
  *
  * Cookie name:  sa_session  (same as Next.js backend — tokens are cross-compatible)
  * Algorithm:    HS256
- * Claims:       id, username, fullName, role
+ * Claims:       id, username, fullName, role, parentId
  */
 @Slf4j
 @Component
@@ -37,15 +37,24 @@ public class JwtTokenProvider {
     }
 
     public String generateToken(UUID id, String username, String fullName, String role) {
-        return Jwts.builder()
+        return generateToken(id, username, fullName, role, null);
+    }
+
+    public String generateToken(UUID id, String username, String fullName, String role, String parentId) {
+        var builder = Jwts.builder()
                 .claim("id",       id.toString())
                 .claim("username", username)
                 .claim("fullName", fullName)
                 .claim("role",     role)
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + jwtExpirationMs))
-                .signWith(key(), Jwts.SIG.HS256)
-                .compact();
+                .signWith(key(), Jwts.SIG.HS256);
+
+        if (parentId != null) {
+            builder.claim("parentId", parentId);
+        }
+
+        return builder.compact();
     }
 
     public Claims parseClaims(String token) {
