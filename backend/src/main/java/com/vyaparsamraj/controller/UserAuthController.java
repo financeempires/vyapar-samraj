@@ -57,18 +57,6 @@ public class UserAuthController {
         return getSession();
     }
 
-    @PostMapping("/signout")
-    public ResponseEntity<ApiResponse<Map<String, Boolean>>> signout(HttpServletResponse response) {
-        authService.logout(response);
-        return ResponseEntity.ok(ApiResponse.ok(Map.of("success", true)));
-    }
-
-    @GetMapping("/signout")
-    public ResponseEntity<ApiResponse<Map<String, Boolean>>> signoutGet(HttpServletResponse response) {
-        authService.logout(response);
-        return ResponseEntity.ok(ApiResponse.ok(Map.of("success", true)));
-    }
-
     @PostMapping("/logout")
     public ResponseEntity<ApiResponse<Map<String, Boolean>>> logout(HttpServletResponse response) {
         authService.logout(response);
