@@ -98,24 +98,40 @@ export function LoginForm() {
     setForgotPinSuccessMsg(null)
     startTransition(async () => {
       try {
+        const cleanUsername = (data.username || '').trim()
+        const cleanPassword = data.password || ''
+
         const response = await fetch('/api/auth/super-admin/login', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            username: data.username,
-            password: data.password,
+            username: cleanUsername,
+            password: cleanPassword,
           }),
         })
 
-        const result = await response.json()
+        let result: any = {}
+        try {
+          const text = await response.text()
+          result = JSON.parse(text)
+        } catch {
+          result = { success: false, message: response.ok ? 'Unexpected response format' : `Server connection error (${response.status})` }
+        }
+
         const payload = result.data || result
         const isSuccess = response.ok && result.success !== false && payload.success !== false
         const hasChallenge = !!(payload.challengeId || result.challengeId || payload.requireOtp || result.requireOtp)
 
+        const token = payload.token || result.token
+        if (token && typeof token === 'string') {
+          localStorage.setItem('auth_token', token)
+          sessionStorage.setItem('auth_token', token)
+        }
+
         if (isSuccess && (payload.role === 'USER' || payload.role === 'SUB_USER' || payload.redirectTo === '/dashboard')) {
-          window.location.href = payload.redirectTo || '/dashboard'
+          router.push(payload.redirectTo || '/dashboard')
         } else if (isSuccess && hasChallenge) {
           setOtpState({
             challengeId: payload.challengeId || result.challengeId,
@@ -123,13 +139,13 @@ export function LoginForm() {
           })
           setResendTimer(30)
         } else if (isSuccess && payload.redirectTo) {
-          window.location.href = payload.redirectTo
+          router.push(payload.redirectTo)
         } else {
           setServerError(payload.message || result.message || 'Invalid username or password')
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('Login error:', err)
-        setServerError('Invalid username or password')
+        setServerError(err?.message || 'Login request failed. Please check your connection.')
       }
     })
   }
@@ -159,22 +175,35 @@ export function LoginForm() {
           }),
         })
 
-        const result = await response.json()
+        let result: any = {}
+        try {
+          const text = await response.text()
+          result = JSON.parse(text)
+        } catch {
+          result = { success: false, message: response.ok ? 'Unexpected response format' : `Server connection error (${response.status})` }
+        }
+
         const payload = result.data || result
+
+        const token = payload.token || result.token
+        if (token && typeof token === 'string') {
+          localStorage.setItem('auth_token', token)
+          sessionStorage.setItem('auth_token', token)
+        }
 
         if (response.ok && payload.success) {
           if (payload.requirePin) {
             setPinState({ challengeId: payload.challengeId || otpState.challengeId })
             setOtpState(null)
           } else {
-            window.location.href = '/super-admin/dashboard'
+            router.push('/super-admin/dashboard')
           }
         } else {
           setServerError(payload.message || 'Invalid OTP code')
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('OTP verification error:', err)
-        setServerError('Invalid OTP code')
+        setServerError(err?.message || 'OTP verification failed. Please check your connection.')
       }
     })
   }
@@ -204,17 +233,30 @@ export function LoginForm() {
           }),
         })
 
-        const result = await response.json()
+        let result: any = {}
+        try {
+          const text = await response.text()
+          result = JSON.parse(text)
+        } catch {
+          result = { success: false, message: response.ok ? 'Unexpected response format' : `Server connection error (${response.status})` }
+        }
+
         const payload = result.data || result
 
+        const token = payload.token || result.token
+        if (token && typeof token === 'string') {
+          localStorage.setItem('auth_token', token)
+          sessionStorage.setItem('auth_token', token)
+        }
+
         if (response.ok && payload.success) {
-          window.location.href = '/super-admin/dashboard'
+          router.push('/super-admin/dashboard')
         } else {
           setServerError(payload.message || 'Incorrect PIN. Access denied.')
         }
-      } catch (err) {
+      } catch (err: any) {
         console.error('PIN verification error:', err)
-        setServerError('Incorrect PIN. Access denied.')
+        setServerError(err?.message || 'PIN verification failed. Please check your connection.')
       }
     })
   }
