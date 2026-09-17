@@ -3,20 +3,6 @@ import { sql } from '@/lib/db'
 import { createSession } from '@/lib/session'
 import bcrypt from 'bcryptjs'
 
-async function isBackendAvailable(): Promise<boolean> {
-  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8085'
-  try {
-    const res = await fetch(`${backendUrl}/api/auth/super-admin/login`, {
-      method: 'OPTIONS',
-      cache: 'no-store',
-      signal: AbortSignal.timeout(2500),
-    })
-    return res.ok || res.status < 500
-  } catch {
-    return false
-  }
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
@@ -30,15 +16,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { success: false, message: 'Username and password are required' },
         { status: 400 }
-      )
-    }
-
-    // Backend must be active for any login to succeed
-    const backendRunning = await isBackendAvailable()
-    if (!backendRunning) {
-      return NextResponse.json(
-        { success: false, message: 'Backend service is unavailable. Please try again later.' },
-        { status: 503 }
       )
     }
 

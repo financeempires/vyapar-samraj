@@ -67,6 +67,7 @@ public class SecurityConfig {
                     "/api/auth/signout",
                     "/api/auth/super-admin/**",
                     "/api/dev/**",
+                    "/api/health",
                     "/actuator/health",
                     "/actuator/info"
                 ).permitAll()
